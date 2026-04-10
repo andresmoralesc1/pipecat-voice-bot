@@ -1,0 +1,432 @@
+# Conversation Prompts and Language Detection for Pipecat Voice Bot
+# Contextual prompts based on conversation state and language detection
+#
+"""Contextual conversation prompts and language detection."""
+import re
+from typing import Literal, Optional
+from loguru import logger
+from config import settings, conversation_state, ConversationState
+
+
+class LanguageDetector:
+    """
+    Detect user language (Spanish or Catalan) from text input.
+
+    Features:
+    - Basic keyword detection for Spanish/Catalan
+    - Fallback to configured default language
+    - State tracking per conversation
+    """
+
+    # Common words/phrases for language detection
+    CATALAN_KEYWORDS = {
+        # Greetings
+        "hola", "bon dia", "bona tarda", "bon vespre", "adéu", "fins aviat",
+        # Common words
+        "gràcies", "si us plau", "per favor", "sí", "no", "bé", "bé",
+        # Restaurant specific
+        "voldria", "vull", "tinc", "vull fer", "una taula", "reservar",
+        # Numbers
+        "un", "una", "dos", "tres", "quatre", "cinc", "sis", "set", "vuit", "nou", "deu",
+        # Time
+        "avui", "demà", "dilluns", "dimarts", "dimecres", "dijous", "divendres", "dissabte", "diumenge",
+        # Questions
+        "què", "com", "quan", "on", "per què", "quant",
+    }
+
+    SPANISH_KEYWORDS = {
+        # Greetings
+        "hola", "buenos días", "buenas tardes", "buenas noches", "adiós", "hasta luego",
+        # Common words
+        "gracias", "por favor", "sí", "no", "bien", "bueno",
+        # Restaurant specific
+        "querría", "quiero", "tengo", "quisiera", "una mesa", "reservar",
+        # Numbers
+        "uno", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
+        # Time
+        "hoy", "mañana", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo",
+        # Questions
+        "qué", "cómo", "cuándo", "dónde", "por qué", "cuánto",
+    }
+
+    @classmethod
+    def detect(cls, text: str, default: str = "es") -> str:
+        """
+        Detect language from text input.
+
+        Args:
+            text: User input text
+            default: Default language if detection fails
+
+        Returns:
+            'ca' for Catalan, 'es' for Spanish
+        """
+        if not text:
+            return default
+
+        text_lower = text.lower()
+
+        # Count Catalan keywords
+        catalan_count = sum(1 for word in cls.CATALAN_KEYWORDS if word in text_lower)
+
+        # Count Spanish keywords (excluding overlaps)
+        spanish_count = sum(1 for word in cls.SPANISH_KEYWORDS if word in text_lower and word not in cls.CATALAN_KEYWORDS)
+
+        # Specific Catalan patterns
+        catalan_patterns = [
+            r"\b(vull|voldria|tinc|haig)\b",  # Verbs
+            r"\b(gràcies|si us plau)\b",  # Politeness
+            r"ç",  # Cedilla (Catalan)
+        ]
+
+        for pattern in catalan_patterns:
+            if re.search(pattern, text_lower):
+                catalan_count += 2  # Weight patterns more heavily
+
+        # Decision based on counts
+        if catalan_count > spanish_count:
+            return "ca"
+        elif spanish_count > catalan_count:
+            return "es"
+
+        return default
+
+    @classmethod
+    def detect_and_update_state(cls, text: str) -> str:
+        """
+        Detect language and update conversation state.
+
+        Args:
+            text: User input text
+
+        Returns:
+            Detected language code
+        """
+        detected = cls.detect(text, settings.DEFAULT_LANGUAGE)
+        conversation_state.language = detected
+        logger.debug(f"Language detected: {detected}")
+        return detected
+
+
+class ConversationPrompts:
+    """
+    Contextual prompts based on conversation state.
+
+    Provides:
+    - State-specific prompts
+    - Multilingual support (Spanish/Catalan)
+    - Dynamic prompt generation
+    """
+
+    PROMPTS = {
+        "greeting": {
+            "es": {
+                "prompt": "Hola, soy Marta, tu asistente para reservas. Tus datos solo se usan para gestionar la reserva. ¿Con quién tengo el gusto?",
+                "vad_mode": "relaxed",
+            },
+            "ca": {
+                "prompt": "Hola! Sóc Anfitrió, el vostre assistent per a reserves. Abans de començar, us comento que les vostres dades s'utilitzaran únicament per gestionar la reserva. Amb qui tinc el gust de parlar?",
+                "vad_mode": "relaxed",
+            },
+        },
+        "asking_name": {
+            "es": {
+                "prompt": "¿Me decís vuestro nombre, por favor?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Em dieu el vostre nom, si us plau?",
+                "vad_mode": "active",
+            },
+        },
+        "capturing_date": {
+            "es": {
+                "prompt": "¡Estupendo, {name}! ¿Para qué día os gustaría reservar?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Fantàstic, {name}! Per a quin dia us agradaria reservar?",
+                "vad_mode": "active",
+            },
+        },
+        "capturing_time": {
+            "es": {
+                "prompt": "Perfecto. ¿Y a qué hora os vendría bien?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Perfecte. I a quina hora us aniria bé?",
+                "vad_mode": "active",
+            },
+        },
+        "capturing_party_size": {
+            "es": {
+                "prompt": "Genial. ¿Para cuántas personas sería, {name}?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Genial. Per a quantes persones seria, {name}?",
+                "vad_mode": "active",
+            },
+        },
+        "asking_phone": {
+            "es": {
+                "prompt": "Perfecto. ¿Me dais un número de teléfono para la confirmación?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Perfecte. Em doneu un número de telèfon per a la confirmació?",
+                "vad_mode": "active",
+            },
+        },
+        "asking_special_requests": {
+            "es": {
+                "prompt": "¿Tenéis alguna petición especial? Por ejemplo: terraza, trona, silla de ruedas, alergias o si celebráis algo especial. Si no, decidme 'no' y seguimos.",
+                "vad_mode": "relaxed",
+            },
+            "ca": {
+                "prompt": "Teniu alguna petició especial? Per exemple: terrassa, trona, cadira de rodes, al·lèrgies o si celebreu alguna cosa especial. Si no, digueu-me 'no' i continuem.",
+                "vad_mode": "relaxed",
+            },
+        },
+        "confirming": {
+            "es": {
+                "prompt": "Perfecto, {name}. Os resumo: mesa para {party_size} personas el {date} a las {time}. ¿Está todo correcto?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Perfecte, {name}. Us resumeixo: taula per a {party_size} persones el {date} a les {time}. Està tot correcte?",
+                "vad_mode": "active",
+            },
+        },
+        "completed": {
+            "es": {
+                "prompt": "¡Contad con ello, {name}! Vuestra reserva está confirmada. Os hemos enviado los detalles por mensaje. Recordad que podéis llamar de nuevo si necesitáis cancelar o modificar algo. ¡Nos vemos!",
+                "vad_mode": "relaxed",
+            },
+            "ca": {
+                "prompt": "Compteu-hi, {name}! La vostra reserva està confirmada. Us hem enviat els detalls per missatge. Recordeu que podeu trucar de nou si necessiteu cancel·lar o modificar alguna cosa. Ens veiem!",
+                "vad_mode": "relaxed",
+            },
+        },
+        "checking_availability": {
+            "es": {
+                "prompt": "Un segundito, {name}, que miro la disponibilidad...",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Un moment, {name}, que miro la disponibilitat...",
+                "vad_mode": "active",
+            },
+        },
+        "no_availability": {
+            "es": {
+                "prompt": "Vaya, {name}, no tenemos disponibilidad para esa hora. ¿Probamos con otra hora o quizás otro día?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Vaja, {name}, no tenim disponibilitat per a aquesta hora. Provem amb una altra hora o potser un altre dia?",
+                "vad_mode": "active",
+            },
+        },
+        "error_retry": {
+            "es": {
+                "prompt": "Perdonad, no os he pillado bien. ¿Me decíais la fecha, la hora o el número de personas?",
+                "vad_mode": "relaxed",
+            },
+            "ca": {
+                "prompt": "Perdoneu, no us he entès bé. Em dèieu la data, l'hora o el nombre de persones?",
+                "vad_mode": "relaxed",
+            },
+        },
+        "query_reservation": {
+            "es": {
+                "prompt": "Claro, {name}. Decidme el código de vuestra reserva y os doy toda la información.",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "És clar, {name}. Digueu-me el codi de la vostra reserva i us dono tota la informació.",
+                "vad_mode": "active",
+            },
+        },
+        "cancel_reservation": {
+            "es": {
+                "prompt": "Entendido. Decidme el código de la reserva que queréis cancelar y vuestro número de teléfono para verificarlo.",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Entès. Digueu-me el codi de la reserva que voleu cancel·lar i el vostre número de telèfon per verificar-ho.",
+                "vad_mode": "active",
+            },
+        },
+        "cancel_confirmed": {
+            "es": {
+                "prompt": "Listo, {name}. Vuestra reserva ha sido cancelada. Si cambiáis de idea, no dudéis en llamar de nuevo. ¡Hasta pronto!",
+                "vad_mode": "relaxed",
+            },
+            "ca": {
+                "prompt": "Fet, {name}. La vostra reserva ha estat cancel·lada. Si canvieu d'opinió, no dubteu a trucar de nou. Fins aviat!",
+                "vad_mode": "relaxed",
+            },
+        },
+        "fast_capture": {
+            "es": {
+                "prompt": "¡Estupendo, {name}! Lo tengo todo: {party_size} personas el {date} a las {time}. ¿Os confirmo la reserva?",
+                "vad_mode": "active",
+            },
+            "ca": {
+                "prompt": "Fantàstic, {name}! Ho tinc tot: {party_size} persones el {date} a les {time}. Us confirmo la reserva?",
+                "vad_mode": "active",
+            },
+        },
+    }
+
+    @classmethod
+    def get_prompt(cls, state: str, language: str | None = None, **kwargs) -> tuple[str, str]:
+        """
+        Get prompt for a specific state and language.
+
+        Args:
+            state: Conversation state (greeting, confirming, etc.)
+            language: Language code ('es' or 'ca'). Defaults to conversation state language
+            **kwargs: Variables to format into the prompt (name, date, time, party_size)
+
+        Returns:
+            Tuple of (prompt_text, vad_mode)
+
+        Raises:
+            ValueError: If state or language is invalid
+        """
+        if state not in cls.PROMPTS:
+            raise ValueError(f"Invalid state: {state}. Valid states: {list(cls.PROMPTS.keys())}")
+
+        if language is None:
+            language = conversation_state.language
+
+        if language not in ("es", "ca"):
+            language = settings.DEFAULT_LANGUAGE
+
+        prompt_data = cls.PROMPTS[state][language]
+        prompt_text = prompt_data["prompt"].format(**kwargs)
+        vad_mode = prompt_data["vad_mode"]
+
+        return prompt_text, vad_mode
+
+    @classmethod
+    def get_system_prompt(cls, language: str | None = None) -> str:
+        """
+        Get the main system prompt for the LLM.
+
+        Args:
+            language: Language code ('es' or 'ca')
+
+        Returns:
+            System prompt string
+        """
+        if language is None:
+            language = conversation_state.language
+
+        if language == "ca":
+            return cls._get_catalan_system_prompt()
+        else:
+            return cls._get_spanish_system_prompt()
+
+    @staticmethod
+    def _get_spanish_system_prompt() -> str:
+        """Get Spanish system prompt."""
+        from datetime import datetime
+        try:
+            import pytz
+            now = datetime.now(pytz.timezone("Europe/Madrid"))
+        except ImportError:
+            now = datetime.now()
+        fecha_hora_actual = now.strftime("%A %d de %B de %Y, %H:%M")
+
+        return f"""Eres Marta, asistente de voz para reservas de restaurante. Español de España, tono informal pero profesional. Entiendes catalán pero respondes siempre en español.
+
+Hoy es {fecha_hora_actual}. Año: {now.year}. Calcula fechas relativas correctamente: "mañana", "el viernes", etc.
+
+SALUDO: Ya lo has dado al conectar. No lo repitas. Espera la respuesta del cliente.
+
+CONVERSIÓN DE HORAS: El cliente habla en formato coloquial. SIEMPRE convierte a formato 24h:
+- "a la una del mediodía" o "a la una" (en contexto mediodía) = 13:00
+- "a las dos" o "a las dos del mediodía" = 14:00
+- "a las dos y media" o "a las dos treinta" = 14:30
+- "a las tres" o "a las tres de la tarde" = 15:00
+- "a las ocho de la noche" = 20:00
+- "a las nueve" o "a las nueve de la noche" = 21:00
+- "a las diez de la noche" = 22:00
+REGLA: Si el cliente dice una hora entre 1 y 4 sin especificar, asume MEDIODÍA (13-16h). Si dice entre 8 y 10 sin especificar, asume NOCHE (20-22h). "Dos y treinta" o "dos y media" = 14:30, NUNCA 15:30.
+HORARIOS: Lunes a sábado. Mediodía: 13:00 a 15:30. Noche: 20:00 a 22:30. Domingos cerrado. Entre turnos cerrado. Si el cliente pide hora fuera de rango, dile los horarios disponibles y sugiere la más cercana.
+
+RESERVAR:
+1. Necesitas: día, hora, número de personas. Pide lo que falte, uno a la vez. Si da todo junto, captúralo sin repetir.
+2. En cuanto tengas los 3 datos (día + hora + personas), llama check_availability INMEDIATAMENTE. No digas "¿quieres que compruebe?" ni esperes confirmación. Di "Un segundo..." y llama la herramienta EN ESE MISMO TURNO, en la misma respuesta. El cliente NO tiene que decir "ok", "vale", "sí" ni nada para que actúes.
+3. Si hay disponibilidad, pide nombre completo y teléfono (si no los tienes ya).
+4. En cuanto tengas nombre y teléfono confirmado, llama create_reservation INMEDIATAMENTE en el mismo turno. No digas "¿te la confirmo?" ni esperes respuesta. Crea la reserva directamente.
+5. Al confirmar, di el código de reserva y que recibirá un WhatsApp de confirmación.
+
+REGLA CRÍTICA: NUNCA pidas permiso para actuar. NUNCA digas "¿quieres que compruebe/reserve/confirme?" Cuando tengas los datos necesarios, ACTÚA en el mismo turno que hablas. Si una herramienta falla, reintenta INMEDIATAMENTE en el mismo turno sin esperar que el cliente diga nada. No digas "voy a intentarlo de nuevo" y esperes — di "un segundo" y llama la herramienta otra vez EN ESE MISMO TURNO.
+
+CONSULTAR/MODIFICAR/CANCELAR:
+- Si el cliente ACABA DE HACER una reserva en ESTA MISMA LLAMADA, ya tienes su código, nombre y teléfono. NO los pidas otra vez. Usa los datos que ya tienes directamente.
+- Si el cliente llama para consultar/modificar/cancelar SIN haber reservado antes en esta llamada, entonces sí pide el código (RES-XXXXX) y teléfono.
+- CANCELAR, ELIMINAR, BORRAR, QUITAR: todo es lo mismo. Llama cancel_reservation.
+- MODIFICAR: Llama modify_reservation con los cambios que pida el cliente.
+- CONSULTAR: Llama get_reservation.
+
+TELÉFONOS: Pide al cliente que diga su número de teléfono dígito a dígito, de tres en tres. Ejemplo: "Dime tu teléfono, dígito a dígito, de tres en tres". Cuando lo recibas, repítelo agrupado de tres y pregunta si es correcto. Si no es correcto, pídele que lo repita dígito a dígito.
+
+ESTILO: Frases cortas. Una pregunta por turno. Usa el nombre del cliente siempre que lo tengas. Muletillas naturales: "Claro", "Perfecto", "Un segundo". Cierra siempre con "¿Algo más en lo que pueda ayudarte?"
+
+PROHIBIDO: No menciones nombre de restaurante, tipo de cocina, herramientas, webhooks ni términos técnicos. No digas "buena elección" ni "estaría encantado". No uses modismos latinoamericanos."""
+
+    @staticmethod
+    def _get_catalan_system_prompt() -> str:
+        """Get Catalan system prompt."""
+        return """### ROL
+Ets Anfitrió, un assistent de veu intel·ligent per a gestió de reserves de restaurant. Ets proper, càlid i eficient — com un bon amfitrió que rep els seus convidats amb un somriure.
+
+### LA TEVA IDENTITAT
+- Nom: Anfitrió
+- Estil: Proper, mediterrani, professional però mai fred
+- Expressions naturals: "fantàstic!", "compteu-hi", "perfecte", "genial", "un moment"
+- Parles en català, usant vosaltres: "voleu?", "digueu-me", "teniu", "us confirmo"
+- MAI esmenti el nom de cap restaurant específic, ni tipus de cuina. Ets un assistent genèric.
+
+### PROTECCIÓ DE DADES
+- A l'inici de cada conversa, informa breument que les dades s'utilitzaran únicament per gestionar la reserva.
+- No insisteixis ni demanis confirmació explícita: n'hi ha prou amb informar i continuar.
+
+### FLUX DE CONVERSACIÓ
+1. Salutació: Presenta't, informa sobre dades i pregunta el nom del client
+2. Nom: Usa el nom del client durant tota la conversa per fer-la personal
+3. Captura de dades: Data, hora, nombre de persones (en aquest ordre)
+4. Telèfon: Demaneu un número de contacte per a la confirmació
+5. Peticions especials: Pregunteu si necessiten terrassa, trona, cadira de rodes, tenen al·lèrgies o celebren alguna cosa
+6. Confirmació: Resumiu totes les dades i demaneu confirmació
+7. Comiat: Confirmeu, recordeu que poden cancel·lar o modificar trucant de nou
+
+### CAPTURA RÀPIDA
+Si el client ho diu tot de cop (ex: "volem reservar per a 4 persones demà a les 9"), captureu totes les dades de cop. No pregunteu dada a dada el que ja us han dit. Confirmeu directament el capturat.
+
+### GESTIÓ DE CONSULTES I CANCEL·LACIONS
+- Si el client vol consultar una reserva existent, demaneu-li el codi (RES-XXXXX)
+- Si vol cancel·lar, demaneu-li el codi i el telèfon per verificar
+- Si vol modificar, expliqueu-li que pot cancel·lar i fer una nova reserva, o indicar els canvis
+
+### REGLES D'OR
+- Brevetat radical: Frases curtes i directes, res de discursos
+- Sempre useu el nom del client un cop el tingueu
+- Farciments conversacionals naturals: "Un moment que miro...", "Deixeu-me veure..."
+- Si l'usuari us interromp, atureu-vos immediatament i escolteu
+- Confirmeu sempre amb un resum abans de crear la reserva
+- Si no enteneu alguna cosa, oferiu opcions en lloc de demanar que repeteixin sense més: "em dèieu la data o el nombre de persones?"
+
+### PERSONALITAT
+To: Com un bon amfitrió mediterrani — acollidor, eficient, amb espurna. Res de robòtic. Parleu com una persona real que gaudeix ajudant."""
+
+
+# Global instances
+language_detector = LanguageDetector()
+conversation_prompts = ConversationPrompts()

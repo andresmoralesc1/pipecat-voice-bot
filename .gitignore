@@ -1,0 +1,33 @@
+# Environment variables with secrets
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
+*.log
+bot_output.log
+
+# Backup files
+*.bak
+*.bak*
+
+# Cache
+.pipecat/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Compressed files
+*.gz
+*.tar.gz

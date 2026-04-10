@@ -1,0 +1,59 @@
+import { NextResponse } from "next/server"
+import { config } from "@/lib/config/env"
+import { db } from "@/lib/db"
+import { restaurants } from "@/drizzle/schema"
+import { eq } from "drizzle-orm"
+
+// The restaurant ID used by demo users
+const DEMO_RESTAURANT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+// GET /api/init - Initialize default restaurant if none exists
+export async function GET() {
+  try {
+    // Check if the demo restaurant exists
+    const demoRestaurant = await db.query.restaurants.findFirst({
+      where: (restaurants, { eq }) => eq(restaurants.id, DEMO_RESTAURANT_ID),
+    })
+
+    if (demoRestaurant) {
+      return NextResponse.json({
+        restaurant: demoRestaurant,
+        created: false,
+      })
+    }
+
+    // Check if ANY restaurant exists
+    const anyRestaurant = await db.query.restaurants.findFirst()
+
+    if (anyRestaurant) {
+      // Update existing restaurant to use the demo ID
+      // Note: We need to delete and recreate because we can't update the primary key
+      await db.delete(restaurants).where(eq(restaurants.id, anyRestaurant.id))
+    }
+
+    // Create default restaurant with the demo ID
+    const [created] = await db
+      .insert(restaurants)
+      .values({
+        id: DEMO_RESTAURANT_ID,
+        name: "El Posit",
+        phone: "+34 977 123 456",
+        address: "Cambrils, Tarragona, España",
+        timezone: "Europe/Madrid",
+        isActive: true,
+      })
+      .returning()
+
+    return NextResponse.json({
+      restaurant: created,
+      created: true,
+      updated: !!anyRestaurant,
+    })
+  } catch (error) {
+    console.error("Error initializing restaurant:", error)
+    return NextResponse.json(
+      { error: "Error al inicializar restaurante", details: String(error) },
+      { status: 500 }
+    )
+  }
+}

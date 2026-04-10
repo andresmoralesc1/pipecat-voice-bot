@@ -1,0 +1,11 @@
+{
+  "name": "Anfitrión - Gestión de Reservas",
+  "short_name": "Anfitrión",
+  "description": "Gestión inteligente de reservas para restaurantes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAFAF5",
+  "theme_color": "#000000",
+  "orientation": "portrait",
+  "categories": ["restaurant", "business"]
+}

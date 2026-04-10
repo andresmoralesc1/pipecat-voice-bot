@@ -1,0 +1,69 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1770745000887,
+      "tag": "0000_demonic_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771768049287,
+      "tag": "0001_secret_kat_farrell",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771844620063,
+      "tag": "0002_military_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1771849469738,
+      "tag": "0003_swift_captain_universe",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774574092116,
+      "tag": "0004_flat_champions",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1774865411896,
+      "tag": "0005_glorious_wild_child",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774910463610,
+      "tag": "0006_material_dark_phoenix",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1774911497779,
+      "tag": "0007_friendly_fantastic_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1774985678897,
+      "tag": "0008_dear_guardsmen",
+      "breakpoints": true
+    }
+  ]
+}

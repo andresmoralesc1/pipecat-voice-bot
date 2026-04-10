@@ -1,0 +1,26 @@
+# Pipecat framework with WebRTC transport
+pipecat-ai[deepgram,openai,cartesia,webrtc]>=0.0.108
+
+# SmallWebRTC Prebuilt UI (required for WebRTC transport)
+pipecat-ai-small-webrtc-prebuilt>=0.0.2
+
+# ASGI server for WebSocket
+uvicorn[standard]>=0.30.0
+websockets>=13.0
+
+# HTTP server
+aiohttp>=3.9.0
+
+# Utilities
+python-dotenv>=1.0.0
+loguru>=0.7.0
+fastapi>=0.115.0
+
+# Configuration and Validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Optional: Language detection (for Catalan/Spanish detection)
+# langdetect>=1.0.9
+pytz
+anthropic
