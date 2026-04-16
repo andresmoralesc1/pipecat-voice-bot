@@ -17,7 +17,8 @@ from loguru import logger
 # Pipecat core
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame, EndFrame
+from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame, EndFrame, BotStoppedSpeakingFrame, BotStartedSpeakingFrame, VADUserStartedSpeakingFrame, UserStartedSpeakingFrame
+from pipecat.observers.base_observer import BaseObserver, FrameProcessed
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
@@ -60,6 +61,7 @@ from config import settings, conversation_state
 from api_client import call_reservations_api, check_availability_with_cache
 from validators import validate_reservation_params, sanitize_special_requests
 from metrics import metrics
+from tts_monitor import tts_monitor, measure_tts_latency, log_tts_summary
 from text_normalizer import normalize_customer_name, normalize_text
 from adaptive_vad import adaptive_vad, conversation_tracker
 from conversation_prompts import conversation_prompts
@@ -111,12 +113,19 @@ async def handle_create_reservation(params: FunctionCallParams):
     customer_name = normalize_customer_name(params.arguments.get("customer_name", ""))
     customer_phone = normalize_text(params.arguments.get("customer_phone", ""))
 
+    # Generate reservation code: NAME + last 4 digits of phone
+    # Example: ALEJANDRO-7708 (for phone 680797708)
+    name_part = customer_name.split()[0].upper()  # First name only, uppercase
+    phone_part = customer_phone[-4:] if len(customer_phone) >= 4 else customer_phone
+    reservation_code = f"{name_part}-{phone_part}"
+
     api_params = {
         "customerName": customer_name,
         "customerPhone": customer_phone,
         "date": params.arguments.get("reservation_date", ""),
         "time": params.arguments.get("reservation_time", ""),
         "partySize": params.arguments.get("party_size", 1),
+        "reservationCode": reservation_code,  # Suggest code to API
     }
     if params.arguments.get("special_requests"):
         api_params["specialRequests"] = params.arguments["special_requests"]
@@ -133,7 +142,9 @@ async def handle_create_reservation(params: FunctionCallParams):
 async def handle_get_reservation(params: FunctionCallParams):
     """Handle get_reservation function call."""
     metrics.function_called("get_reservation")
-    result = await call_reservations_api("getReservation", {"code": params.arguments["code"]})
+    # Normalize reservation code to uppercase (STT may return lowercase)
+    code = params.arguments["code"].upper()
+    result = await call_reservations_api("getReservation", {"code": code})
     await params.result_callback({
         "voice_message": result.get("voiceMessage", "Reserva encontrada"),
         "reservation": result.get("reservation"),
@@ -144,7 +155,11 @@ async def handle_get_reservation(params: FunctionCallParams):
 async def handle_cancel_reservation(params: FunctionCallParams):
     """Handle cancel_reservation function call."""
     metrics.function_called("cancel_reservation")
-    result = await call_reservations_api("cancelReservation", params.arguments)
+    # Normalize reservation code to uppercase (STT may return lowercase)
+    args = params.arguments.copy()
+    if "code" in args:
+        args["code"] = args["code"].upper()
+    result = await call_reservations_api("cancelReservation", args)
     await params.result_callback({
         "voice_message": result.get("voiceMessage", "Reserva cancelada"),
         "success": result.get("success", False),
@@ -154,7 +169,11 @@ async def handle_cancel_reservation(params: FunctionCallParams):
 async def handle_modify_reservation(params: FunctionCallParams):
     """Handle modify_reservation function call."""
     metrics.function_called("modify_reservation")
-    result = await call_reservations_api("modifyReservation", params.arguments)
+    # Normalize reservation code to uppercase (STT may return lowercase)
+    args = params.arguments.copy()
+    if "code" in args:
+        args["code"] = args["code"].upper()
+    result = await call_reservations_api("modifyReservation", args)
     await params.result_callback({
         "voice_message": result.get("voiceMessage", "Reserva modificada"),
         "success": result.get("success", False),
@@ -207,7 +226,7 @@ def build_tools():
     """Build the function schemas and tools for the LLM."""
     create_reservation_func = FunctionSchema(
         name="create_reservation",
-        description="Call this function when you have customer_name, customer_phone, date, time and partySize. Generate ONLY the tool_call, do not generate any text before or instead of calling this function.",
+        description="Call this function when user confirms their name and you already have phone from caller ID, date, time and partySize. Generate ONLY the tool_call. The phone number is in the system prompt under INFORMACIÓN DE LA LLAMADA. Do not generate any text, only the tool_call.",
         properties={
             "customer_name": {"type": "string", "description": "Customer full name"},
             "customer_phone": {"type": "string", "description": "Phone number (format: Spanish mobile: 6XX XXX XXX)"},
@@ -222,16 +241,16 @@ def build_tools():
 
     get_reservation_func = FunctionSchema(
         name="get_reservation",
-        description="Get details of an existing reservation by code",
+        description="Get details of an existing reservation by code. Code format: NAME-XXXX (e.g., ALEJANDRO-7708). The code is the customer's first name followed by the last 4 digits of their phone.",
         properties={
-            "code": {"type": "string", "description": "Reservation code (e.g., RES-12345)"},
+            "code": {"type": "string", "description": "Reservation code in format NAME-XXXX (e.g., ALEJANDRO-7708)"},
         },
         required=["code"],
     )
 
     cancel_reservation_func = FunctionSchema(
         name="cancel_reservation",
-        description="Cancel an existing reservation. Requires code and phone for verification.",
+        description="Cancel an existing reservation. Requires code (format: NAME-XXXX, e.g., ALEJANDRO-7708) and phone for verification.",
         properties={
             "code": {"type": "string", "description": "Reservation code"},
             "phone": {"type": "string", "description": "Phone number used for reservation"},
@@ -241,9 +260,9 @@ def build_tools():
 
     modify_reservation_func = FunctionSchema(
         name="modify_reservation",
-        description="Modify an existing reservation. Requires code, phone, and changes to make.",
+        description="Modify an existing reservation. Requires code (format: NAME-XXXX, e.g., ALEJANDRO-7708), phone, and changes to make.",
         properties={
-            "code": {"type": "string", "description": "Reservation code"},
+            "code": {"type": "string", "description": "Reservation code in format NAME-XXXX (e.g., ALEJANDRO-7708)"},
             "phone": {"type": "string", "description": "Phone number for verification"},
             "changes": {
                 "type": "object",
@@ -302,6 +321,64 @@ async def bot(runner_args: RunnerArguments):
     adaptive_vad.reset()
     conversation_state.reset()
 
+    # ── Timeout management ─────────────────────────────────────────────────
+    # End call if user doesn't speak within timeout seconds after bot stops
+    timeout_seconds = settings.CALL_TIMEOUT_SECONDS
+
+    class CallTimeoutObserver(BaseObserver):
+        """Observer that ends the call if user doesn't speak within timeout."""
+
+        def __init__(self):
+            super().__init__()
+            self.timeout_task = None
+            self.user_has_spoken = False
+            self.task_ref = None
+
+        def set_task(self, task):
+            """Set reference to the PipelineTask."""
+            self.task_ref = task
+
+        async def end_call_on_timeout(self):
+            """End the call after timeout seconds of silence."""
+            try:
+                await asyncio.sleep(timeout_seconds)
+                if not self.user_has_spoken and self.task_ref:
+                    logger.info(f"⏱️ Timeout: No user speech for {timeout_seconds}s, ending call")
+                    await self.task_ref.queue_frames([EndFrame()])
+            except asyncio.CancelledError:
+                pass
+
+        def start_timeout(self):
+            """Start the timeout timer when bot stops speaking."""
+            if self.timeout_task and not self.timeout_task.done():
+                self.timeout_task.cancel()
+            self.user_has_spoken = False
+            self.timeout_task = asyncio.create_task(self.end_call_on_timeout())
+
+        def cancel_timeout(self):
+            """Cancel the timeout when user starts speaking."""
+            if self.timeout_task and not self.timeout_task.done():
+                self.timeout_task.cancel()
+            self.user_has_spoken = True
+
+        async def on_process_frame(self, data: FrameProcessed):
+            """Monitor all frames flowing through the pipeline."""
+            frame = data.frame
+            # When bot stops speaking, start timeout
+            if isinstance(frame, BotStoppedSpeakingFrame):
+                logger.debug(f"🤖 Bot stopped speaking, starting {timeout_seconds}s timeout")
+                self.start_timeout()
+            # When bot starts speaking again, cancel any pending timeout
+            elif isinstance(frame, BotStartedSpeakingFrame):
+                logger.debug("🤖 Bot started speaking, cancelling pending timeout")
+                self.cancel_timeout()
+            # When user starts speaking, cancel timeout (VAD or Transcription-based)
+            elif isinstance(frame, (VADUserStartedSpeakingFrame, UserStartedSpeakingFrame)):
+                logger.debug("👤 User started speaking, cancelling timeout")
+                self.cancel_timeout()
+
+    timeout_observer = CallTimeoutObserver()
+
     # ── Telnyx serializer ──────────────────────────────────────────────
     serializer = TelnyxFrameSerializer(
         stream_id=stream_id,
@@ -337,6 +414,7 @@ async def bot(runner_args: RunnerArguments):
             f"\n- Ya tienes su teléfono: {clean_number}"
             f"\n- NO se lo pidas de nuevo. Úsalo directamente como customer_phone."
             f"\n- Solo pide teléfono si el cliente dice explícitamente que quiere usar otro número."
+            f"\n- Cuando el cliente confirme su nombre (incluso como pregunta: \"¿Juan García?\"), eso completa todos los datos. Genera el tool_call de create_reservation directamente."
         )
     else:
         # Número privado/oculto
@@ -390,18 +468,65 @@ async def bot(runner_args: RunnerArguments):
     llm.register_function("check_availability", handle_check_availability)
 
     # ── Filler phrases during function calls ───────────────────────────
+    # TAREA 19: Fillers mejorados (5-7s) para cubrir latencias TTS anormales
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
         for fc in function_calls:
             logger.debug(f"FunctionCall: {fc.function_name}")
             if fc.function_name == "check_availability":
-                await tts.queue_frame(TTSSpeakFrame("Déjame verificar disponibilidad..."))
+                # Filler de ~5 segundos
+                await tts.queue_frame(TTSSpeakFrame(
+                    "Déjame verificar disponibilidad en ese horario. "
+                    "Un momento, por favor, estoy consultando el sistema..."
+                ))
             elif fc.function_name == "create_reservation":
-                await tts.queue_frame(TTSSpeakFrame("Un momento, creo tu reserva..."))
+                # Filler de ~6 segundos
+                await tts.queue_frame(TTSSpeakFrame(
+                    "Perfecto, voy a crear tu reserva. "
+                    "Déjame un momento que registro todos los datos en el sistema..."
+                ))
             elif fc.function_name == "modify_reservation":
-                await tts.queue_frame(TTSSpeakFrame("Déjame modificar tu reserva..."))
+                # Filler contextual según el tipo de modificación
+                changes = fc.arguments.get("changes", {}) if hasattr(fc, 'arguments') else {}
+                change_type = next(iter(changes.keys())) if changes else None
+
+                if change_type == "newSpecialRequests":
+                    await tts.queue_frame(TTSSpeakFrame(
+                        "Perfecto, estoy añadiendo esa observación a tu reserva. "
+                        "Déjame un momento que actualizo los detalles en el sistema..."
+                    ))
+                elif change_type == "newDate":
+                    await tts.queue_frame(TTSSpeakFrame(
+                        "Entendido, quieres cambiar el día de la reserva. "
+                        "Déjame verificar la disponibilidad para la nueva fecha..."
+                    ))
+                elif change_type == "newTime":
+                    await tts.queue_frame(TTSSpeakFrame(
+                        "Vale, quieres cambiar la hora. "
+                        "Déjame un momento que compruebo si hay mesas disponibles..."
+                    ))
+                elif change_type == "newPartySize":
+                    await tts.queue_frame(TTSSpeakFrame(
+                        "Perfecto, estás cambiando el número de personas. "
+                        "Déjame actualizar la reserva con el nuevo grupo..."
+                    ))
+                else:
+                    # Filler genérico de ~6 segundos
+                    await tts.queue_frame(TTSSpeakFrame(
+                        "Déjame modificar tu reserva con esos cambios. "
+                        "Un momento, por favor, estoy actualizando el sistema..."
+                    ))
             elif fc.function_name == "cancel_reservation":
-                await tts.queue_frame(TTSSpeakFrame("Proceso a cancelar tu reserva..."))
+                # Filler de ~5 segundos
+                await tts.queue_frame(TTSSpeakFrame(
+                    "Vale, voy a procesar la cancelación de tu reserva. "
+                    "Déjame un momento que lo hago en el sistema..."
+                ))
+            elif fc.function_name == "get_reservation":
+                # Filler de ~4 segundos
+                await tts.queue_frame(TTSSpeakFrame(
+                    "Déjame buscar tu reserva en el sistema..."
+                ))
 
         # Context truncation
         msgs = context.get_messages()
@@ -438,7 +563,11 @@ async def bot(runner_args: RunnerArguments):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
+        observers=[timeout_observer],  # Add timeout observer
     )
+
+    # Set task reference in timeout observer
+    timeout_observer.set_task(task)
 
     # ── Handle call disconnect ─────────────────────────────────────────
     @transport.event_handler("on_connection_closed")
@@ -448,6 +577,9 @@ async def bot(runner_args: RunnerArguments):
         summary = conversation_tracker.get_summary()
         logger.info(f"📊 Conversation summary: {summary}")
         metrics.log_summary()
+
+        # TAREA 19: Log TTS latency summary
+        log_tts_summary()
 
     # ── Start: greet the caller via LLM ────────────────────────────────
     # Queue an LLMRunFrame so the LLM generates the initial greeting
