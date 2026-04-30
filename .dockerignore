@@ -1,0 +1,12 @@
+.env
+.env.*
+.git
+.gitignore
+__pycache__
+*.pyc
+*.log
+*.bak*
+*.md
+secrets/
+backups/
+container_export/
